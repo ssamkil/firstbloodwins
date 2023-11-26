@@ -1,0 +1,2 @@
+- Initial Goal : 프로 경기들의 경기 내역을 모아 각 리그의 팀별 First Blood 확률 계산
+- ERD 및 명세서 추후 업데이트 예정
