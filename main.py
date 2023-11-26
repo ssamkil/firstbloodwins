@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-import httpx, leaguepedia_parser as lp, time
+import httpx, time
 
 app = FastAPI()
 
@@ -28,33 +28,51 @@ async def get_match_ids(gameName, tagLine):
 
     return match_ids
 
-async def get_first_kill_data(match_ids):
+async def get_win_rate_data(match_ids):
 
-    ''' get first blood data for each match from the match ids already retrieved '''
+    ''' get first blood + ward placed data and calculate win rate accordingly for each match '''
 
-    total = []
+    first_blood_total = []
+    ward_placed_total = []
 
     for match_id in match_ids:
+        ward_placed_count = []
+
         URL = f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}'
         response = httpx.get(URL, headers=headers)
         match_info = response.json()
 
         participants = match_info['info']['participants']
         for participant in participants:
+            ward_placed_count.append(participant['wardsPlaced'])
             if participant['firstBloodKill'] == True:
                 first_blood_participant = participant
                 first_blood_win_bool = first_blood_participant['win']
-                total.append(first_blood_win_bool)
+                first_blood_total.append(first_blood_win_bool)
 
-    first_kill_win_rate = round(sum(total) / len(total), 1)
+        if sum(ward_placed_count[0:5]) > sum(ward_placed_count[5:10]):
+            if participants[0]['win']:
+                ward_placed_total.append(True)
+            else:
+                ward_placed_total.append(False)
+        elif sum(ward_placed_count[0:5]) < sum(ward_placed_count[5:10]):
+            if participants[5]['win']:
+                ward_placed_total.append(True)
+            else:
+                ward_placed_total.append(False)
 
-    return first_kill_win_rate
+    first_kill_win_rate = round(first_blood_total.count(True) / len(first_blood_total), 1)
+    ward_placed_win_rate = round(ward_placed_total.count(True) / len(ward_placed_total), 1)
+
+    result = {'first_kill_win_rate': first_kill_win_rate, 'ward_placed_win_rate': ward_placed_win_rate}
+
+    return result
 
 @app.get('/')
 async def test(gameName: str, tagLine: str):
     start = time.time()
     match_ids = await get_match_ids(gameName, tagLine)
-    result = await get_first_kill_data(match_ids)
+    result = await get_win_rate_data(match_ids)
     end = time.time()
     print(f'{end - start: .5f} sec')
 
