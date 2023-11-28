@@ -1,9 +1,13 @@
-import httpx, time
-from fastapi         import APIRouter
-from config.database import usersCollection
-from settings        import RIOT_API_KEY
+import httpx, time, asyncio
+from fastapi           import APIRouter, status
+from fastapi.responses import JSONResponse
+from config.database   import usersCollection
+from settings          import RIOT_API_KEY
 
-router = APIRouter()
+user = APIRouter(
+    prefix='/user',
+    tags=['User']
+)
 
 headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
@@ -22,7 +26,7 @@ async def get_match_ids(gameName: str, tagLine: str):
     response = httpx.get(URL, headers=headers)
     puuid = response.json()['puuid']
 
-    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=40'
+    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=20'
 
     response = httpx.get(URL2, headers=headers)
     match_ids = response.json()
@@ -30,25 +34,31 @@ async def get_match_ids(gameName: str, tagLine: str):
     return match_ids
 
 async def winrate_calc(won_matches: int, total_matches: int):
+
+    ''' basic win rate calculation '''
+
     result = round(won_matches / total_matches, 1)
 
     return result
 
-async def get_win_rate_data(match_ids):
+async def get_win_rate_data(match_id):
 
     ''' get first blood + ward placed data and calculate win rate accordingly for each match '''
+
+    start = time.time()
 
     first_blood_total = []
     ward_placed_total = []
     first_blood_role  = []
     pings_total       = []
 
-    for match_id in match_ids:
-        ward_placed_count = []
-        total_pings_per_player = []
+    # for match_id in match_ids:
+    ward_placed_count = []
+    total_pings_per_player = []
+    URL = f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}'
 
-        URL = f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}'
-        response = httpx.get(URL, headers=headers)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(URL, headers=headers)
         match_info = response.json()
 
         participants = match_info['info']['participants']
@@ -81,12 +91,12 @@ async def get_win_rate_data(match_ids):
             else:
                 ward_placed_total.append(False)
 
-        if total_pings_per_player[0:5] > sum(total_pings_per_player)[5:10]:
+        if sum(total_pings_per_player[0:5]) > sum(total_pings_per_player[5:10]):
             if participants[0]['win']:
                 pings_total.append(True)
             else:
                 pings_total.append(False)
-        elif total_pings_per_player[0:5] < sum(total_pings_per_player)[5:10]:
+        elif sum(total_pings_per_player[0:5]) < sum(total_pings_per_player[5:10]):
             if participants[5]['win']:
                 pings_total.append(True)
             else:
@@ -117,34 +127,65 @@ async def get_win_rate_data(match_ids):
         'pings_called_win_rate': pings_called_win_rate
     }
 
-    return result
-
-@router.get('/')
-async def get_user_win_rate(gameName: str, tagLine: str):
-    start = time.time()
-    match_ids = await get_match_ids(gameName, tagLine)
-    win_rate = await get_win_rate_data(match_ids)
-
-    user = {
-        'gameName': gameName,
-        'tagLine': tagLine,
-        'first_blood_wr': win_rate['first_blood_win_rate'],
-        'ward_placed_wr': win_rate['ward_placed_win_rate']
-    }
-
-    if usersCollection.find_one({'gameName': gameName, 'tagLine': tagLine}):
-        usersCollection.update_one({
-            'gameName': gameName
-        },
-            {'$set': {
-                'first_blood_wr': win_rate['first_blood_win_rate'],
-                'ward_placed_wr': win_rate['ward_placed_win_rate']
-                }
-            }
-        )
-    else:
-        usersCollection.insert_one(user)
-
     end = time.time()
     print(f'{end - start: .5f} sec')
-    return win_rate
+
+    return result
+
+async def make_multiple_requests(match_ids):
+
+    ''' async programming to perform multiple API calls concurrently '''
+
+    result = []
+    cycle = len(match_ids) // 20
+    leftover = len(match_ids) % 20
+
+    if len(match_ids) <= 20:
+        for match_id in match_ids:
+            result.append(get_win_rate_data(match_id))
+    else:
+        for i in range(cycle):
+            for match_id in match_ids[0+(i*20):20+(i*20)]:
+                result.append(get_win_rate_data(match_id))
+        if leftover > 0:
+            for match_id in match_ids[cycle*20:20+leftover+(cycle*20)]:
+                result.append(get_win_rate_data(match_id))
+    return await asyncio.gather(*result)
+
+@user.get('')
+async def get_user_win_rate(gameName: str, tagLine: str):
+    try:
+        match_ids = await get_match_ids(gameName, tagLine)
+        win_rate = await make_multiple_requests(match_ids)
+        win_rate = win_rate[0]
+
+        user = {
+            'gameName': gameName,
+            'tagLine': tagLine,
+            'first_blood_wr': win_rate['first_blood_win_rate'],
+            'ward_placed_wr': win_rate['ward_placed_win_rate'],
+            'first_blood_role_wr': win_rate['first_blood_role_win_rate'],
+            'pings_called_wr': win_rate['pings_called_win_rate']
+        }
+
+        if usersCollection.find_one({'gameName': gameName, 'tagLine': tagLine}):
+            usersCollection.update_one({
+                'gameName': gameName
+            },
+                {'$set': {
+                    'first_blood_wr': win_rate['first_blood_win_rate'],
+                    'ward_placed_wr': win_rate['ward_placed_win_rate'],
+                    'first_blood_role_wr': win_rate['first_blood_role_win_rate'],
+                    'pings_called_wr': win_rate['pings_called_win_rate']
+                    }
+                }
+            )
+
+            return JSONResponse({'MESSAGE': 'SUCCESS', 'RESULT': win_rate}, status_code=status.HTTP_200_OK)
+
+        else:
+            usersCollection.insert_one(user)
+            return JSONResponse({'MESSAGE': 'CREATED', 'RESULT': win_rate}, status_code=status.HTTP_201_CREATED)
+
+    except ValueError as e:
+        return JSONResponse({'ERROR': e.message}, status_code=status.HTTP_400_BAD_REQUEST)
