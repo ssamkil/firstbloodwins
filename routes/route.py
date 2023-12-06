@@ -33,11 +33,11 @@ async def get_match_ids(gameName: str, tagLine: str):
 
     return match_ids
 
-async def winrate_calc(won_matches: int, total_matches: int):
+async def winrate_calc(won_matches: int, total_matches: int, early_surr_matches: int):
 
     ''' basic win rate calculation '''
 
-    result = round(won_matches / total_matches, 1)
+    result = round(won_matches / (total_matches - early_surr_matches), 1)
 
     return result
 
@@ -47,10 +47,10 @@ async def get_win_rate_data(match_id):
 
     start = time.time()
 
-    first_blood_total = []
-    ward_placed_total = []
-    first_blood_role  = []
-    pings_total       = []
+    first_blood_total: bool
+    ward_placed_total: bool
+    pings_total      : bool
+    first_blood_role = 'NONE'
 
     # for match_id in match_ids:
     ward_placed_count = []
@@ -66,51 +66,98 @@ async def get_win_rate_data(match_id):
         first_blood_bool = team_data['objectives']['champion']['first']
 
         if first_blood_bool and team_data['win']:
-            first_blood_total.append(True)
+            first_blood_total = True
         else:
-            first_blood_total.append(False)
+            first_blood_total = False
 
         for participant in participants:
-            search_key = 'Pings'
-
             if participant['firstBloodKill']:
-                first_blood_role.append(participant['teamPosition'])
+                first_blood_role = participant['teamPosition']
 
+            search_key = 'Pings'
             ping_count_per_player = [val for key, val in participant.items() if search_key in key]
             total_pings_per_player.append(sum(ping_count_per_player))
             ward_placed_count.append(participant['wardsPlaced'])
 
-        if sum(ward_placed_count[0:5]) > sum(ward_placed_count[5:10]):
+        if sum(ward_placed_count[0:5]) >= sum(ward_placed_count[5:10]):
             if participants[0]['win']:
-                ward_placed_total.append(True)
+                ward_placed_total = True
             else:
-                ward_placed_total.append(False)
-        elif sum(ward_placed_count[0:5]) < sum(ward_placed_count[5:10]):
+                ward_placed_total = False
+        elif sum(ward_placed_count[0:5]) <= sum(ward_placed_count[5:10]):
             if participants[5]['win']:
-                ward_placed_total.append(True)
+                ward_placed_total = True
             else:
-                ward_placed_total.append(False)
+                ward_placed_total = False
 
-        if sum(total_pings_per_player[0:5]) > sum(total_pings_per_player[5:10]):
+        if sum(total_pings_per_player[0:5]) >= sum(total_pings_per_player[5:10]):
             if participants[0]['win']:
-                pings_total.append(True)
+                pings_total = True
             else:
-                pings_total.append(False)
-        elif sum(total_pings_per_player[0:5]) < sum(total_pings_per_player[5:10]):
+                pings_total = False
+        elif sum(total_pings_per_player[0:5]) <= sum(total_pings_per_player[5:10]):
             if participants[5]['win']:
-                pings_total.append(True)
+                pings_total = True
             else:
-                pings_total.append(False)
+                pings_total = False
+
+    result = {
+        'first_blood_total' : first_blood_total,
+        'ward_placed_total' : ward_placed_total,
+        'first_blood_role' : first_blood_role,
+        'pings_total' : pings_total
+    }
+
+    end = time.time()
+    print(f'{end - start: .5f} sec')
+
+    return result
+
+async def make_multiple_requests(match_ids):
+
+    ''' async programming to perform multiple API calls concurrently '''
+
+    first_blood_total = []
+    ward_placed_total = []
+    first_blood_role  = []
+    pings_total       = []
+
+    cycle = len(match_ids) // 20
+    leftover = len(match_ids) % 20
+
+    if len(match_ids) <= 20:
+        for match_id in match_ids:
+            match_data = await get_win_rate_data(match_id)
+            first_blood_total.append(match_data['first_blood_total'])
+            first_blood_role.append(match_data['first_blood_role'])
+            ward_placed_total.append(match_data['ward_placed_total'])
+            pings_total.append(match_data['pings_total'])
+    else:
+        for i in range(cycle):
+            for match_id in match_ids[0+(i*20):20+(i*20)]:
+                match_data = await get_win_rate_data(match_id)
+                first_blood_total.append(match_data['first_blood_total'])
+                first_blood_role.append(match_data['first_blood_role'])
+                ward_placed_total.append(match_data['ward_placed_total'])
+                pings_total.append(match_data['pings_total'])
+        if leftover > 0:
+            for match_id in match_ids[cycle*20:20+leftover+(cycle*20)]:
+                match_data = await get_win_rate_data(match_id)
+                first_blood_total.append(match_data['first_blood_total'])
+                first_blood_role.append(match_data['first_blood_role'])
+                ward_placed_total.append(match_data['ward_placed_total'])
+                pings_total.append(match_data['pings_total'])
 
     total_match = len(first_blood_total)
-    first_blood_win_rate = await winrate_calc(first_blood_total.count(True), total_match)
-    ward_placed_win_rate = await winrate_calc(ward_placed_total.count(True), total_match)
-    pings_called_win_rate = await winrate_calc(pings_total.count(True), total_match)
-    Top = await winrate_calc(first_blood_role.count('TOP'), total_match)
-    Jug = await winrate_calc(first_blood_role.count('JUNGLE'), total_match)
-    Mid = await winrate_calc(first_blood_role.count('MIDDLE'), total_match)
-    Adc = await winrate_calc(first_blood_role.count('BOTTOM'), total_match)
-    Sup = await winrate_calc(first_blood_role.count('UTILITY'), total_match)
+    early_surr_match = first_blood_role.count('NONE')
+    first_blood_win_rate = await winrate_calc(first_blood_total.count(True), total_match, early_surr_match)
+    ward_placed_win_rate = await winrate_calc(ward_placed_total.count(True), total_match, early_surr_match)
+    pings_called_win_rate = await winrate_calc(pings_total.count(True), total_match, early_surr_match)
+    Top = await winrate_calc(first_blood_role.count('TOP'), total_match, early_surr_match)
+    Jug = await winrate_calc(first_blood_role.count('JUNGLE'), total_match, early_surr_match)
+    Mid = await winrate_calc(first_blood_role.count('MIDDLE'), total_match, early_surr_match)
+    Adc = await winrate_calc(first_blood_role.count('BOTTOM'), total_match, early_surr_match)
+    Sup = await winrate_calc(first_blood_role.count('UTILITY'), total_match, early_surr_match)
 
     first_blood_role_win_rate = {
         'TOP': Top,
@@ -127,37 +174,15 @@ async def get_win_rate_data(match_id):
         'pings_called_win_rate': pings_called_win_rate
     }
 
-    end = time.time()
-    print(f'{end - start: .5f} sec')
+    print(result)
 
     return result
-
-async def make_multiple_requests(match_ids):
-
-    ''' async programming to perform multiple API calls concurrently '''
-
-    result = []
-    cycle = len(match_ids) // 20
-    leftover = len(match_ids) % 20
-
-    if len(match_ids) <= 20:
-        for match_id in match_ids:
-            result.append(get_win_rate_data(match_id))
-    else:
-        for i in range(cycle):
-            for match_id in match_ids[0+(i*20):20+(i*20)]:
-                result.append(get_win_rate_data(match_id))
-        if leftover > 0:
-            for match_id in match_ids[cycle*20:20+leftover+(cycle*20)]:
-                result.append(get_win_rate_data(match_id))
-    return await asyncio.gather(*result)
 
 @user.get('')
 async def get_user_win_rate(gameName: str, tagLine: str):
     try:
         match_ids = await get_match_ids(gameName, tagLine)
         win_rate = await make_multiple_requests(match_ids)
-        win_rate = win_rate[0]
 
         user = {
             'gameName': gameName,
