@@ -27,7 +27,7 @@ async def get_match_ids(gameName: str, tagLine: str):
     response = httpx.get(URL, headers=headers)
     puuid = response.json()['puuid']
 
-    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=5'
+    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=20'
 
     response = httpx.get(URL2, headers=headers)
     match_ids = response.json()
@@ -139,17 +139,8 @@ async def make_multiple_requests(match_ids):
     first_blood_role  = []
     pings_total       = []
 
-    # for match_id in match_ids:
-    #     match_data = await get_win_rate_data(match_id)
-    #     first_blood_total.append(match_data['first_blood_total'])
-    #     first_blood_role.append(match_data['first_blood_role'])
-    #     ward_placed_total.append(match_data['ward_placed_total'])
-    #     pings_total.append(match_data['pings_total'])
-
     match_datas = await get_win_rate_data(match_ids)
-    print(match_datas)
     for match_data in match_datas:
-        # print(match_data)
         first_blood_total.append(match_data['first_blood_total'])
         first_blood_role.append(match_data['first_blood_role'])
         ward_placed_total.append(match_data['ward_placed_total'])
@@ -235,12 +226,6 @@ async def test_for_async(gameName: str, tagLine: str):
     # result3 = await task3
     # result4 = await task4
 
-    # result = await asyncio.gather(
-    #     make_multiple_requests(match_ids[0:5]),
-    #     make_multiple_requests(match_ids[5:10]),
-    #     make_multiple_requests(match_ids[10:15]),
-    #     make_multiple_requests(match_ids[15:20])
-    # )
     result = await make_multiple_requests(match_ids)
 
     return result
