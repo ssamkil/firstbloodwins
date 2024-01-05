@@ -18,7 +18,6 @@ headers = {
         'X-Riot-Token': RIOT_API_KEY,
     }
 
-
 async def get_match_ids(gameName: str, tagLine: str):
 
     ''' get puuid using in-game name & tag line '''
@@ -28,7 +27,7 @@ async def get_match_ids(gameName: str, tagLine: str):
     response = httpx.get(URL, headers=headers)
     puuid = response.json()['puuid']
 
-    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=20'
+    URL2 = f'https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?type=ranked&start=0&count=5'
 
     response = httpx.get(URL2, headers=headers)
     match_ids = response.json()
@@ -43,11 +42,14 @@ async def winrate_calc(won_matches: int, total_matches: int, early_forfeit_match
 
     return result
 
-async def get_win_rate_data(match_id):
+async def fetch_data(url):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        return response.json()
+
+async def get_win_rate_data(match_ids):
 
     ''' get first blood + ward placed data and calculate win rate accordingly for each match '''
-
-    start = time.time()
 
     first_blood_total: bool
     ward_placed_total: bool
@@ -57,62 +59,74 @@ async def get_win_rate_data(match_id):
     # for match_id in match_ids:
     ward_placed_count = []
     total_pings_per_player = []
-    URL = f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}'
+    urls = []
+    result = []
 
-    # async with httpx.AsyncClient() as client:
-    #     response = await client.get(URL, headers=headers)
-    response = httpx.get(URL, headers=headers)
-    match_info = response.json()
+    start = time.time()
 
-    participants = match_info['info']['participants']
-    team_data = match_info['info']['teams'][0]
-    first_blood_bool = team_data['objectives']['champion']['first']
+    # URL = f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}'
 
-    if first_blood_bool and team_data['win']:
-        first_blood_total = True
-    else:
-        first_blood_total = False
+    for match_id in match_ids:
+        urls.append(f'https://asia.api.riotgames.com/lol/match/v5/matches/{match_id}')
 
-    for participant in participants:
-        if participant['firstBloodKill']:
-            first_blood_role = participant['teamPosition']
+    tasks = [fetch_data(url) for url in urls]
+    results = await asyncio.gather(*tasks)
 
-        search_key = 'Pings'
-        ping_count_per_player = [val for key, val in participant.items() if search_key in key]
-        total_pings_per_player.append(sum(ping_count_per_player))
-        ward_placed_count.append(participant['wardsPlaced'])
-
-    if sum(ward_placed_count[0:5]) >= sum(ward_placed_count[5:10]):
-        if participants[0]['win']:
-            ward_placed_total = True
-        else:
-            ward_placed_total = False
-    elif sum(ward_placed_count[0:5]) <= sum(ward_placed_count[5:10]):
-        if participants[5]['win']:
-            ward_placed_total = True
-        else:
-            ward_placed_total = False
-
-    if sum(total_pings_per_player[0:5]) >= sum(total_pings_per_player[5:10]):
-        if participants[0]['win']:
-            pings_total = True
-        else:
-            pings_total = False
-    elif sum(total_pings_per_player[0:5]) <= sum(total_pings_per_player[5:10]):
-        if participants[5]['win']:
-            pings_total = True
-        else:
-            pings_total = False
-
-    result = {
-        'first_blood_total' : first_blood_total,
-        'ward_placed_total' : ward_placed_total,
-        'first_blood_role' : first_blood_role,
-        'pings_total' : pings_total
-    }
+    # response = httpx.get(URL, headers=headers)
+    # match_info = response.json()
 
     end = time.time()
     print(f'{end - start: .5f} sec')
+
+    for match_info in results:
+        participants = match_info['info']['participants']
+        team_data = match_info['info']['teams'][0]
+        first_blood_bool = team_data['objectives']['champion']['first']
+
+        if first_blood_bool and team_data['win']:
+            first_blood_total = True
+        else:
+            first_blood_total = False
+
+        for participant in participants:
+            if participant['firstBloodKill']:
+                first_blood_role = participant['teamPosition']
+
+            search_key = 'Pings'
+            ping_count_per_player = [val for key, val in participant.items() if search_key in key]
+            total_pings_per_player.append(sum(ping_count_per_player))
+            ward_placed_count.append(participant['wardsPlaced'])
+
+        if sum(ward_placed_count[0:5]) >= sum(ward_placed_count[5:10]):
+            if participants[0]['win']:
+                ward_placed_total = True
+            else:
+                ward_placed_total = False
+        elif sum(ward_placed_count[0:5]) <= sum(ward_placed_count[5:10]):
+            if participants[5]['win']:
+                ward_placed_total = True
+            else:
+                ward_placed_total = False
+
+        if sum(total_pings_per_player[0:5]) >= sum(total_pings_per_player[5:10]):
+            if participants[0]['win']:
+                pings_total = True
+            else:
+                pings_total = False
+        elif sum(total_pings_per_player[0:5]) <= sum(total_pings_per_player[5:10]):
+            if participants[5]['win']:
+                pings_total = True
+            else:
+                pings_total = False
+
+        value = {
+            'first_blood_total' : first_blood_total,
+            'ward_placed_total' : ward_placed_total,
+            'first_blood_role' : first_blood_role,
+            'pings_total' : pings_total
+        }
+
+        result.append(value)
 
     return result
 
@@ -125,32 +139,21 @@ async def make_multiple_requests(match_ids):
     first_blood_role  = []
     pings_total       = []
 
-    cycle = len(match_ids) // 20
-    leftover = len(match_ids) % 20
+    # for match_id in match_ids:
+    #     match_data = await get_win_rate_data(match_id)
+    #     first_blood_total.append(match_data['first_blood_total'])
+    #     first_blood_role.append(match_data['first_blood_role'])
+    #     ward_placed_total.append(match_data['ward_placed_total'])
+    #     pings_total.append(match_data['pings_total'])
 
-    if len(match_ids) <= 20:
-        for match_id in match_ids:
-            match_data = await get_win_rate_data(match_id)
-            print(match_data)
-            first_blood_total.append(match_data['first_blood_total'])
-            first_blood_role.append(match_data['first_blood_role'])
-            ward_placed_total.append(match_data['ward_placed_total'])
-            pings_total.append(match_data['pings_total'])
-    else:
-        for i in range(cycle):
-            for match_id in match_ids[0+(i*20):20+(i*20)]:
-                match_data = await get_win_rate_data(match_id)
-                first_blood_total.append(match_data['first_blood_total'])
-                first_blood_role.append(match_data['first_blood_role'])
-                ward_placed_total.append(match_data['ward_placed_total'])
-                pings_total.append(match_data['pings_total'])
-        if leftover > 0:
-            for match_id in match_ids[cycle*20:20+leftover+(cycle*20)]:
-                match_data = await get_win_rate_data(match_id)
-                first_blood_total.append(match_data['first_blood_total'])
-                first_blood_role.append(match_data['first_blood_role'])
-                ward_placed_total.append(match_data['ward_placed_total'])
-                pings_total.append(match_data['pings_total'])
+    match_datas = await get_win_rate_data(match_ids)
+    print(match_datas)
+    for match_data in match_datas:
+        # print(match_data)
+        first_blood_total.append(match_data['first_blood_total'])
+        first_blood_role.append(match_data['first_blood_role'])
+        ward_placed_total.append(match_data['ward_placed_total'])
+        pings_total.append(match_data['pings_total'])
 
     total_match = len(first_blood_total)
     early_forfeit_match = first_blood_role.count('NONE')
@@ -216,3 +219,28 @@ async def get_user_win_rate(gameName: str, tagLine: str):
 
     except ValueError as e:
         return JSONResponse({'ERROR': e.message}, status_code=status.HTTP_400_BAD_REQUEST)
+
+@user.get('/test')
+async def test_for_async(gameName: str, tagLine: str):
+    match_ids = await get_match_ids(gameName, tagLine)
+
+    # asyncio.run(tester(match_ids))
+
+    # task1 = asyncio.create_task(make_multiple_requests(match_ids[0:5]))
+    # task2 = asyncio.create_task(make_multiple_requests(match_ids[5:10]))
+    # task3 = asyncio.create_task(make_multiple_requests(match_ids[10:15]))
+    # task4 = asyncio.create_task(make_multiple_requests(match_ids[15:20]))
+    # result1 = await task1
+    # result2 = await task2
+    # result3 = await task3
+    # result4 = await task4
+
+    # result = await asyncio.gather(
+    #     make_multiple_requests(match_ids[0:5]),
+    #     make_multiple_requests(match_ids[5:10]),
+    #     make_multiple_requests(match_ids[10:15]),
+    #     make_multiple_requests(match_ids[15:20])
+    # )
+    result = await make_multiple_requests(match_ids)
+
+    return result
